@@ -1,0 +1,907 @@
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua", true))()
+
+local Window = Library:CreateWindow({
+    Title = "overkill spoof",
+    Center = true,
+    AutoShow = true,
+    TabPadding = 4,
+    MenuFadeTime = 0.15
+})
+
+local Tabs = {
+    Spoof = Window:AddTab("spoof"),
+    Weapons = Window:AddTab("weapons"),
+    Performance = Window:AddTab("performance")
+}
+
+local ProfileBox = Tabs.Spoof:AddLeftGroupbox("profile")
+local VisualBox = Tabs.Spoof:AddRightGroupbox("visual")
+local LeaderboardBox = Tabs.Spoof:AddRightGroupbox("leaderboard")
+local TitleBox = Tabs.Spoof:AddRightGroupbox("titles")
+local WeaponBox = Tabs.Weapons:AddLeftGroupbox("weapon stats")
+local WeaponScrapeBox = Tabs.Weapons:AddRightGroupbox("scraper")
+local PerfBox = Tabs.Performance:AddLeftGroupbox("fps boost")
+
+local Persistent = true
+local WeaponPersistent = true
+local PerfEnabled = false
+local DisableParticles = true
+local LowLighting = true
+local Headshot = ""
+local CustomTitleColor = Color3.fromRGB(255, 255, 255)
+local CustomTitleGlow = true
+local CustomTitleRainbow = false
+local WeaponAssets = getgenv().__OverkillWeaponAssets or {}
+local WeaponScraped = false
+local WeaponCatalog = {Primary = {}, Second = {}, Melee = {}, Utility = {}}
+
+getgenv().__OverkillWeaponAssets = WeaponAssets
+getgenv().__OverkillVisualSpoof = getgenv().__OverkillVisualSpoof or {}
+
+pcall(function()
+    Headshot = Players:GetUserThumbnailAsync(LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+end)
+
+local function clearTable(t)
+    for k in pairs(t) do
+        t[k] = nil
+    end
+end
+
+local function pg()
+    return LocalPlayer:FindFirstChild("PlayerGui")
+end
+
+local function byPath(root, path)
+    local cur = root
+    for _, name in ipairs(path) do
+        if not cur then return nil end
+        cur = cur:FindFirstChild(name)
+    end
+    return cur
+end
+
+local function isText(obj)
+    return obj and (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox"))
+end
+
+local function cleanNumber(value)
+    return tostring(value or ""):gsub(",", ""):match("%-?%d+%.?%d*") or ""
+end
+
+local function commaNumber(value)
+    local s = cleanNumber(value)
+    if s == "" then return "" end
+    local sign, int, dec = s:match("^([%-]?)(%d+)(%.?%d*)$")
+    if not int then return s end
+    return sign .. int:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "") .. (dec or "")
+end
+
+local function normalize(name, value)
+    local s = tostring(value or "")
+    if s == "" then return "" end
+    if name == "Level" then return "Lvl. " .. commaNumber(s) end
+    if name == "RawLevel" then return commaNumber(s) end
+    if name == "Wins" or name == "Streak" then return commaNumber(s) end
+    if name == "WinRate" then return cleanNumber(s:gsub("%%", "")) .. "%" end
+    if name == "Username" then return "@" .. s:gsub("^@", "") end
+    if name == "KDR" then return cleanNumber(s) end
+    return s
+end
+
+local function setText(obj, value)
+    if not isText(obj) or value == nil or value == "" then return end
+    pcall(function()
+        obj.Text = tostring(value)
+    end)
+end
+
+local function textOf(obj)
+    return isText(obj) and tostring(obj.Text) or ""
+end
+
+local function numberFrom(text)
+    local n = tostring(text or ""):gsub(",", ""):match("%-?%d+")
+    return tonumber(n) or 0
+end
+
+local function visual(key)
+    local v = getgenv().__OverkillVisualSpoof or {}
+    return v[key] and tostring(v[key]) or ""
+end
+
+local function option(id)
+    local o = Options and Options[id]
+    return o and tostring(o.Value or "") or ""
+end
+
+local function imageId(value)
+    local s = tostring(value or "")
+    if s == "" then return "" end
+    local low = s:lower()
+    if low == "auto" or low == "auto / asset id" or low == "asset id" or low == "none" then return "" end
+    if s:find("rbxassetid://") or s:find("rbxasset://") then return s end
+    local n = s:match("%d+")
+    return n and ("rbxassetid://" .. n) or ""
+end
+
+local function softVisible(obj)
+    if not obj then return end
+    pcall(function()
+        if obj:IsA("GuiObject") then obj.Visible = true end
+        if obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then obj.Enabled = true end
+    end)
+end
+
+local function overheadVisible(obj)
+    local cur = obj
+    while cur do
+        softVisible(cur)
+        if cur:IsA("ScreenGui") or cur:IsA("PlayerGui") then break end
+        cur = cur.Parent
+    end
+end
+
+local function saveWeaponAsset(name, asset)
+    name = tostring(name or "")
+    asset = imageId(asset)
+    if name ~= "" and asset ~= "" and asset ~= "rbxasset://textures/ui/GuiImagePlaceholder.png" then
+        WeaponAssets[name:lower()] = asset
+        WeaponAssets[name] = asset
+    end
+end
+
+local function weaponCategoryFromText(text)
+    local s = tostring(text or ""):lower()
+    if s:find("primary") then return "Primary" end
+    if s:find("second") or s:find("secondary") then return "Second" end
+    if s:find("melee") then return "Melee" end
+    if s:find("utility") then return "Utility" end
+    return nil
+end
+
+local function addWeaponToCatalog(category, name, image)
+    category = weaponCategoryFromText(category) or category
+    name = tostring(name or "")
+    image = imageId(image)
+    if not WeaponCatalog[category] or name == "" or image == "" then return end
+    if name:lower() == "gunname" or name:lower():find("slot") then return end
+    WeaponCatalog[category][name] = image
+    saveWeaponAsset(name, image)
+end
+
+local function weaponImageFromName(name)
+    local s = tostring(name or "")
+    if s == "" then return "" end
+    local direct = WeaponAssets[s] or WeaponAssets[s:lower()]
+    if direct then return direct end
+    local compact = s:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", ""):gsub("%-", ""):gsub("_", "")
+    if #compact < 2 then return "" end
+    for weaponName, asset in pairs(WeaponAssets) do
+        local key = tostring(weaponName):lower():gsub("%s+", ""):gsub("%-", ""):gsub("_", "")
+        if key == compact then return asset end
+    end
+    for weaponName, asset in pairs(WeaponAssets) do
+        local key = tostring(weaponName):lower():gsub("%s+", ""):gsub("%-", ""):gsub("_", "")
+        if #compact >= 3 and (key:find(compact, 1, true) or compact:find(key, 1, true)) then return asset end
+    end
+    return ""
+end
+
+local function setPath(path, value)
+    local root = pg()
+    if root then setText(byPath(root, path), value) end
+end
+
+local function setMatching(root, fn, value)
+    if not root or value == nil or value == "" then return end
+    for _, obj in ipairs(root:GetDescendants()) do
+        if isText(obj) then
+            local ok = false
+            pcall(function()
+                ok = fn(obj, obj:GetFullName():lower(), obj.Name:lower(), tostring(obj.Text):lower())
+            end)
+            if ok then setText(obj, value) end
+        end
+    end
+end
+
+ProfileBox:AddToggle("PersistentSpoof", {Text = "persistent", Default = true}):OnChanged(function(v)
+    Persistent = v
+end)
+
+local profilePaths = {
+    Streak = {"Lobby", "PlayerProfile", "Main", "Streak", "Value"},
+    WinRate = {"Lobby", "PlayerProfile", "Main", "WinRate", "Value"},
+    Wins = {"Lobby", "PlayerProfile", "Main", "Wins", "Value"},
+    Level = {"Lobby", "PlayerProfile", "Main", "CurrentLevel"},
+    KDR = {"Lobby", "PlayerProfile", "Main", "KDR", "Value"},
+    DisplayName = {"Lobby", "PlayerProfile", "Main", "DisplayName"},
+    Username = {"Lobby", "PlayerProfile", "Main", "Username"}
+}
+
+local profileOptions = {
+    Streak = "SpoofStreak",
+    WinRate = "SpoofWinRate",
+    Wins = "SpoofWins",
+    Level = "SpoofLevel",
+    KDR = "SpoofKDR",
+    DisplayName = "SpoofDisplayName",
+    Username = "SpoofUsername"
+}
+
+local function profileRaw(name)
+    return option(profileOptions[name])
+end
+
+local function effectiveWins()
+    local p = profileRaw("Wins")
+    return p ~= "" and p or visual("LBWins")
+end
+
+local function effectiveStreak()
+    local p = profileRaw("Streak")
+    return p ~= "" and p or visual("LBStreak")
+end
+
+local function effectiveLevel()
+    local p = profileRaw("Level")
+    return p ~= "" and p or visual("LBLevel")
+end
+
+local function forceStreakVisible(root)
+    local streak = byPath(root, {"Lobby", "PlayerProfile", "Main", "Streak"})
+    softVisible(streak)
+    softVisible(streak and streak:FindFirstChild("Value"))
+end
+
+local function spoofProfile(name)
+    local root = pg()
+    if root then
+        forceStreakVisible(root)
+        setText(byPath(root, profilePaths[name]), normalize(name, option(profileOptions[name])))
+    end
+end
+
+local function addProfile(name, label, placeholder)
+    ProfileBox:AddInput(profileOptions[name], {Text = label, Default = "", Placeholder = placeholder, Numeric = false, Finished = false})
+    ProfileBox:AddButton("apply " .. label, function()
+        spoofProfile(name)
+        applyVisual()
+    end)
+end
+
+local function addInput(box, id, label, placeholder, key)
+    box:AddInput(id, {Text = label, Default = "", Placeholder = placeholder, Numeric = false, Finished = false}):OnChanged(function(v)
+        getgenv().__OverkillVisualSpoof[key] = v
+    end)
+end
+
+addProfile("Streak", "profile streak", "25")
+addProfile("WinRate", "profile win rate", "100")
+addProfile("Wins", "profile wins", "1000")
+addProfile("Level", "profile level", "1000")
+addProfile("KDR", "profile kdr", "1.24")
+addProfile("DisplayName", "display name", "nostalgia")
+addProfile("Username", "username", "nostalgia")
+
+ProfileBox:AddButton("apply all profile", function()
+    for name in pairs(profilePaths) do spoofProfile(name) end
+    applyVisual()
+end)
+
+addInput(VisualBox, "SpoofCrownsVisual", "crowns", "9,999,999", "Crowns")
+addInput(VisualBox, "SpoofLobbyXP", "xp", "999999/999999 XP", "LobbyXP")
+addInput(VisualBox, "SpoofOverheadStreak", "overhead streak", "25", "OverheadStreak")
+addInput(VisualBox, "SpoofDeviceIcon", "device icon", "140667367842091", "DeviceIcon")
+
+addInput(LeaderboardBox, "SpoofLBUsername", "username", "nostalgia", "LBUsername")
+addInput(LeaderboardBox, "SpoofLBDisplay", "display name", "nostalgia", "LBDisplay")
+addInput(LeaderboardBox, "SpoofLBRank", "force rank", "", "LBRank")
+addInput(LeaderboardBox, "SpoofLBWins", "wins value", "999", "LBWins")
+addInput(LeaderboardBox, "SpoofLBStreak", "streak value", "25", "LBStreak")
+addInput(LeaderboardBox, "SpoofLBLevel", "level value", "999", "LBLevel")
+
+addInput(TitleBox, "SpoofTitleId", "title id", "owner", "TitleId")
+addInput(TitleBox, "SpoofTitleText", "title text", "Owner", "TitleText")
+addInput(TitleBox, "SpoofCustomTitleText", "custom title", "nostalgia", "CustomTitleText")
+addInput(TitleBox, "SpoofCustomTitleSize", "title size", "18", "CustomTitleSize")
+
+TitleBox:AddToggle("CustomTitleGlow", {Text = "custom glow", Default = true}):OnChanged(function(v) CustomTitleGlow = v end)
+TitleBox:AddToggle("CustomTitleRainbow", {Text = "rainbow title", Default = false}):OnChanged(function(v) CustomTitleRainbow = v end)
+TitleBox:AddLabel("custom color"):AddColorPicker("CustomTitleColor", {Default = Color3.fromRGB(255, 255, 255), Callback = function(v) CustomTitleColor = v end})
+
+WeaponBox:AddToggle("WeaponPersistent", {Text = "persistent weapons", Default = true}):OnChanged(function(v)
+    WeaponPersistent = v
+end)
+
+addInput(WeaponBox, "WeaponPrimaryName", "primary", "AK-47", "Weapon1Name")
+addInput(WeaponBox, "WeaponSecondName", "second", "Handgun", "Weapon2Name")
+addInput(WeaponBox, "WeaponMeleeName", "melee", "Fist", "Weapon3Name")
+addInput(WeaponBox, "WeaponUtilityName", "utility", "Grenade", "Weapon4Name")
+
+local function applyDeviceSpoof()
+    local asset = imageId(visual("DeviceIcon"))
+    if asset == "" then return end
+    for _, base in ipairs({pg(), Workspace}) do
+        if base then
+            for _, obj in ipairs(base:GetDescendants()) do
+                local full = obj:GetFullName():lower()
+                if full:find("overhead") and full:find("device") then
+                    softVisible(obj)
+                    if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.Name:lower() == "icon" then
+                        pcall(function()
+                            obj.Image = asset
+                            obj.Visible = true
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function profileWeaponRows()
+    local root = pg()
+    local weapons = root and byPath(root, {"Lobby", "PlayerProfile", "Main", "Weapons"})
+    local rows = {}
+    if not weapons then return rows end
+
+    for _, row in ipairs(weapons:GetChildren()) do
+        if row:IsA("GuiObject") and row.Visible and row.Name ~= "Template" then
+            local main = row:FindFirstChild("Main")
+            if main then
+                local hasName = main:FindFirstChild("ItemName") or main:FindFirstChild("ItemCount")
+                local hasRender = main:FindFirstChild("Holder") and main.Holder:FindFirstChild("WeaponTemplate") and main.Holder.WeaponTemplate:FindFirstChild("Render")
+                local hasIcon = main:FindFirstChild("Icon")
+                if hasName or hasRender or hasIcon then
+                    table.insert(rows, row)
+                end
+            end
+        end
+    end
+
+    table.sort(rows, function(a, b)
+        local ay = math.floor(a.AbsolutePosition.Y / 8)
+        local by = math.floor(b.AbsolutePosition.Y / 8)
+        if ay == by then
+            return a.AbsolutePosition.X < b.AbsolutePosition.X
+        end
+        return a.AbsolutePosition.Y < b.AbsolutePosition.Y
+    end)
+
+    return rows
+end
+
+local function setProfileWeaponRow(row, weaponName, image)
+    if not row or weaponName == "" then return end
+    image = imageId(image) ~= "" and imageId(image) or weaponImageFromName(weaponName)
+
+    local main = row:FindFirstChild("Main")
+    if not main then return end
+
+    local nameLabel = main:FindFirstChild("ItemName") or main:FindFirstChild("ItemCount")
+    setText(nameLabel, weaponName)
+
+    local render = main:FindFirstChild("Holder")
+        and main.Holder:FindFirstChild("WeaponTemplate")
+        and main.Holder.WeaponTemplate:FindFirstChild("Render")
+
+    if not render then
+        render = main:FindFirstChild("Icon")
+    end
+
+    if image ~= "" and render and (render:IsA("ImageLabel") or render:IsA("ImageButton")) then
+        pcall(function()
+            render.Image = image
+            render.Visible = true
+        end)
+    end
+end
+
+local function scrapeWeaponAssets()
+    clearTable(WeaponAssets)
+    for category in pairs(WeaponCatalog) do
+        clearTable(WeaponCatalog[category])
+    end
+
+    local function scanCard(card)
+        local weaponName = ""
+        local category = ""
+        local image = ""
+
+        for _, obj in ipairs(card:GetDescendants()) do
+            if isText(obj) then
+                local n = obj.Name:lower()
+                local txt = tostring(obj.Text or "")
+                if n == "weaponname" or n == "itemname" or n == "name" or n == "title" then
+                    local low = txt:lower()
+                    if txt ~= "" and low ~= "gunname" and low ~= "primary" and low ~= "second" and low ~= "secondary" and low ~= "melee" and low ~= "utility" and not low:find("slot") and not low:find("selecting") then
+                        weaponName = txt
+                    end
+                elseif n == "weaponkind" or n == "weaponclass" or n == "slottype" or n == "type" then
+                    category = weaponCategoryFromText(txt) or category
+                end
+            elseif obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+                local full = obj:GetFullName():lower()
+                local n = obj.Name:lower()
+                local img = tostring(obj.Image or "")
+                if img ~= "" and img ~= "rbxasset://textures/ui/GuiImagePlaceholder.png" then
+                    if n == "render" or full:find("holder%.weapontemplate%.render") or full:find("weapontemplate%.render") or n == "icon" then
+                        image = img
+                    end
+                end
+            end
+        end
+
+        local full = card:GetFullName():lower()
+        if category == "" then
+            if full:find("primary") then category = "Primary" end
+            if full:find("second") or full:find("secondary") then category = "Second" end
+            if full:find("melee") then category = "Melee" end
+            if full:find("utility") then category = "Utility" end
+        end
+
+        if weaponName ~= "" and image ~= "" then
+            if category ~= "" and WeaponCatalog[category] then
+                addWeaponToCatalog(category, weaponName, image)
+            else
+                saveWeaponAsset(weaponName, image)
+            end
+        end
+    end
+
+    local function scanGui(base)
+        if not base then return end
+        for _, obj in ipairs(base:GetDescendants()) do
+            local full = obj:GetFullName():lower()
+            if obj:IsA("Frame") or obj:IsA("ImageButton") or obj:IsA("ImageLabel") then
+                if full:find("weaponselection") or full:find("armory") or full:find("loadout") or full:find("mobile%.mobile%.slot") or full:find("bottomright%.slots%.weaponslot") or full:find("activeweapon") or full:find("playerprofile%.main%.weapons") then
+                    scanCard(obj)
+                end
+            end
+        end
+    end
+
+    local function scanDirectory()
+        local milk = ReplicatedStorage:FindFirstChild("Milk")
+        local dir = milk and milk:FindFirstChild("Directory")
+        local weapons = dir and dir:FindFirstChild("Weapons")
+        if not weapons then return end
+
+        for _, module in ipairs(weapons:GetDescendants()) do
+            if module:IsA("ModuleScript") then
+                pcall(function()
+                    local data = require(module)
+                    if type(data) ~= "table" then return end
+                    local name = data.name or data.Name or data.displayName or data.DisplayName or data.ID or data.id or module.Name
+                    local category = data.weaponType or data.WeaponType or data.type or data.Type or data.slot or data.Slot or data.class or data.Class
+                    local asset = data.icon or data.Icon or data.image or data.Image or data.render or data.Render or data.texture or data.Texture
+                    if type(asset) == "table" then asset = asset.icon or asset.Icon or asset.image or asset.Image or asset.render or asset.Render end
+                    if category then addWeaponToCatalog(category, name, asset) else saveWeaponAsset(name, asset) end
+                end)
+            end
+        end
+    end
+
+    scanGui(pg())
+    scanGui(ReplicatedStorage)
+    scanDirectory()
+
+    addWeaponToCatalog("Primary", "AK-47", "rbxassetid://89067467254686")
+    addWeaponToCatalog("Primary", "Tec-9", "rbxassetid://72597371963188")
+    addWeaponToCatalog("Second", "Handgun", "rbxassetid://121230308356682")
+    addWeaponToCatalog("Melee", "Fist", "rbxassetid://100898054759206")
+    addWeaponToCatalog("Utility", "Grenade", "rbxassetid://118255204634633")
+    addWeaponToCatalog("Utility", "Satchel", "rbxassetid://75744818177901")
+    addWeaponToCatalog("Utility", "Taser", "rbxassetid://81315411107481")
+    addWeaponToCatalog("Utility", "Jump Pad", "rbxassetid://85428042381229")
+    addWeaponToCatalog("Utility", "Medkit", "rbxassetid://134206072787096")
+
+    WeaponScraped = true
+    return WeaponAssets
+end
+
+local function applyWeaponStats()
+    if not WeaponScraped then scrapeWeaponAssets() end
+
+    local names = {
+        visual("Weapon1Name"),
+        visual("Weapon2Name"),
+        visual("Weapon3Name"),
+        visual("Weapon4Name")
+    }
+
+    local rows = profileWeaponRows()
+
+    for i = 1, 4 do
+        if rows[i] and names[i] ~= "" then
+            setProfileWeaponRow(rows[i], names[i], weaponImageFromName(names[i]))
+        end
+    end
+end
+
+WeaponScrapeBox:AddButton("rescrape weapons", function()
+    scrapeWeaponAssets()
+    applyWeaponStats()
+end)
+
+WeaponScrapeBox:AddButton("print weapons", function()
+    scrapeWeaponAssets()
+    for category, list in pairs(WeaponCatalog) do
+        for name, asset in pairs(list) do
+            print("[overkill weapon]", category, name, asset)
+        end
+    end
+end)
+
+WeaponScrapeBox:AddButton("apply weapon stats", function()
+    applyWeaponStats()
+end)
+
+local function titleNameFromRow(row)
+    local main = row and row:FindFirstChild("Main")
+    if not main then return row and row.Name or "" end
+    for _, obj in ipairs(main:GetDescendants()) do
+        if isText(obj) then
+            local txt = tostring(obj.Text or "")
+            local low = txt:lower()
+            if txt ~= "" and low ~= "locked" and low ~= "equip" and low ~= "equipped" and not low:find("awarded") and not low:find("held by") and not low:find("worn by") then return txt end
+        end
+    end
+    return row and row.Name or ""
+end
+
+local function applyTitleGradient(label, id)
+    if not label or not id or id == "" then return end
+    local milk = ReplicatedStorage:FindFirstChild("Milk")
+    local directory = milk and milk:FindFirstChild("Directory")
+    local titles = directory and directory:FindFirstChild("Titles")
+    local gradient = titles and titles:FindFirstChild(id)
+    if gradient and gradient:IsA("UIGradient") then
+        for _, child in ipairs(label:GetChildren()) do if child:IsA("UIGradient") then child:Destroy() end end
+        gradient:Clone().Parent = label
+    end
+end
+
+local function currentCustomColor()
+    if CustomTitleRainbow then return Color3.fromHSV((tick() % 4) / 4, 1, 1) end
+    return CustomTitleColor
+end
+
+local function styleTitleLabel(label, id)
+    if not isText(label) then return end
+    local customText = visual("CustomTitleText")
+    local customSize = tonumber(visual("CustomTitleSize"))
+    if customText ~= "" then
+        for _, child in ipairs(label:GetChildren()) do if child:IsA("UIGradient") then child:Destroy() end end
+        pcall(function()
+            label.TextColor3 = currentCustomColor()
+            label.TextStrokeTransparency = CustomTitleGlow and 0 or 0.55
+            if customSize then label.TextSize = customSize end
+        end)
+    else
+        applyTitleGradient(label, id)
+    end
+end
+
+local function spoofTitleVisual(id, text)
+    id = id or visual("TitleId")
+    local custom = visual("CustomTitleText")
+    local title = custom ~= "" and custom or text or visual("TitleText")
+    if title == "" then title = id end
+    if title == "" then return end
+
+    getgenv().__OverkillVisualSpoof.TitleId = id
+    if custom == "" then getgenv().__OverkillVisualSpoof.TitleText = title end
+
+    for _, base in ipairs({pg(), Workspace}) do
+        if base then
+            for _, obj in ipairs(base:GetDescendants()) do
+                local full = obj:GetFullName():lower()
+                local name = obj.Name:lower()
+                if full:find("overhead") and full:find("moreinfo") then
+                    if obj:IsA("GuiObject") or obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then overheadVisible(obj) end
+                    if isText(obj) and name == "title" then
+                        overheadVisible(obj)
+                        setText(obj, title)
+                        styleTitleLabel(obj, id)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function markTitleButtons(selectedId)
+    local root = pg()
+    local titles = root and byPath(root, {"Lobby", "Titles", "Main", "Clip", "ScrollingFrame"})
+    if not titles then return end
+    for _, row in ipairs(titles:GetChildren()) do
+        if row:IsA("GuiObject") and row.Name ~= "Template" then
+            local main = row:FindFirstChild("Main")
+            local button = main and main:FindFirstChild("Button")
+            if button then
+                for _, obj in ipairs(button:GetDescendants()) do
+                    if isText(obj) then
+                        if row.Name == selectedId then setText(obj, "Equipped")
+                        elseif obj.Text:lower():find("locked") or obj.Text:lower() == "equipped" or obj.Text == "" then setText(obj, "Equip") end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function equipTitle(id, text)
+    id = id or visual("TitleId")
+    if id == "" and visual("CustomTitleText") == "" then return end
+    getgenv().__OverkillVisualSpoof.TitleId = id
+    if text and text ~= "" then getgenv().__OverkillVisualSpoof.TitleText = text end
+    markTitleButtons(id)
+    spoofTitleVisual(id, text)
+end
+
+local function applyTitleUnlocker()
+    local root = pg()
+    if not root then return end
+    local titles = byPath(root, {"Lobby", "Titles", "Main", "Clip", "ScrollingFrame"})
+    if not titles then return end
+    local selected = visual("TitleId")
+
+    for _, row in ipairs(titles:GetChildren()) do
+        if row:IsA("GuiObject") and row.Name ~= "Template" then
+            row.Visible = true
+            local main = row:FindFirstChild("Main")
+            local button = main and main:FindFirstChild("Button")
+            local titleText = titleNameFromRow(row)
+
+            if button then
+                button.Visible = true
+                button.Active = true
+                pcall(function() button.AutoButtonColor = true end)
+
+                for _, obj in ipairs(button:GetDescendants()) do
+                    if isText(obj) then
+                        local low = obj.Text:lower()
+                        if row.Name == selected and selected ~= "" then setText(obj, "Equipped")
+                        elseif low:find("locked") or low == "" then setText(obj, "Equip") end
+                    end
+                end
+
+                if button:IsA("GuiButton") and not button:GetAttribute("OverkillTitleHooked") then
+                    button:SetAttribute("OverkillTitleHooked", true)
+                    button.MouseButton1Click:Connect(function() equipTitle(row.Name, titleText) end)
+                    button.Activated:Connect(function() equipTitle(row.Name, titleText) end)
+                end
+            end
+
+            for _, obj in ipairs(row:GetDescendants()) do
+                if isText(obj) and obj.Text:lower():find("locked") then setText(obj, "Equip") end
+            end
+        end
+    end
+
+    spoofTitleVisual()
+end
+
+TitleBox:AddButton("visual unlock titles", function() applyTitleUnlocker() end)
+TitleBox:AddButton("equip title visual", function() equipTitle() end)
+TitleBox:AddButton("apply custom title", function() spoofTitleVisual(visual("TitleId"), visual("CustomTitleText")) end)
+
+local function setRowImage(row)
+    if not row or Headshot == "" then return end
+    for _, obj in ipairs(row:GetDescendants()) do
+        if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+            local full = obj:GetFullName():lower()
+            local name = obj.Name:lower()
+            if not full:find("icon") and not name:find("icon") and not full:find("rank") and not full:find("value") then
+                pcall(function() obj.Image = Headshot end)
+            end
+        end
+    end
+end
+
+local function getRowValue(row)
+    local icon = row and row:FindFirstChild("Icon")
+    local value = icon and icon:FindFirstChild("Value")
+    return numberFrom(textOf(value))
+end
+
+local function getRows(group)
+    local rows = {}
+    local main = group and group:FindFirstChild("Main")
+    local scrolling = main and main:FindFirstChild("ScrollingFrame")
+    if not scrolling then return rows, nil end
+    for _, child in ipairs(scrolling:GetChildren()) do
+        if child:IsA("GuiObject") and child:FindFirstChild("Username") and child:FindFirstChild("Icon") and child.Name ~= "__OverkillSpoofRow" then table.insert(rows, child) end
+    end
+    table.sort(rows, function(a, b) return getRowValue(a) > getRowValue(b) end)
+    return rows, scrolling
+end
+
+local function writeSpoofRow(row, value, rank)
+    if not row then return end
+    local username = visual("LBUsername") ~= "" and normalize("Username", visual("LBUsername")) or ("@" .. LocalPlayer.Name)
+    local display = visual("LBDisplay") ~= "" and visual("LBDisplay") or LocalPlayer.DisplayName
+    local forcedRank = visual("LBRank")
+    row.Visible = true
+    setText(row:FindFirstChild("Username"), username)
+    setText(row:FindFirstChild("DisplayName"), display)
+    setText(row:FindFirstChild("Rank"), forcedRank ~= "" and forcedRank or ("#" .. tostring(rank)))
+    local icon = row:FindFirstChild("Icon")
+    if icon then setText(icon:FindFirstChild("Value"), commaNumber(value)) end
+    setRowImage(row)
+end
+
+local function spoofLeaderboardGroup(group, value)
+    if not group or not value or value == "" then return end
+    local rows, scrolling = getRows(group)
+    if not scrolling or #rows == 0 then return end
+
+    local fake = scrolling:FindFirstChild("__OverkillSpoofRow")
+    if not fake then
+        fake = rows[1]:Clone()
+        fake.Name = "__OverkillSpoofRow"
+        fake.Parent = scrolling
+    end
+
+    local spoofNumber = numberFrom(value)
+    local rank = 1
+    for _, row in ipairs(rows) do if getRowValue(row) >= spoofNumber then rank += 1 end end
+    rank = math.clamp(rank, 1, #rows + 1)
+
+    for i, row in ipairs(rows) do
+        row.Visible = true
+        row.LayoutOrder = i >= rank and i + 1 or i
+    end
+
+    fake.LayoutOrder = rank
+    writeSpoofRow(fake, value, rank)
+    if #rows > 0 then rows[#rows].Visible = false end
+
+    local main = group:FindFirstChild("Main")
+    local player = main and main:FindFirstChild("Player")
+    if player then writeSpoofRow(player, value, rank) end
+end
+
+local function spoofOwnWinsTables(value)
+    local root = pg()
+    if not root or value == "" then return end
+    local shown = commaNumber(value)
+    local names = {LocalPlayer.Name:lower(), LocalPlayer.DisplayName:lower(), visual("LBUsername"):lower(), visual("LBDisplay"):lower(), normalize("Username", visual("LBUsername")):lower()}
+
+    for _, container in ipairs(root:GetDescendants()) do
+        if container:IsA("GuiObject") then
+            local full = container:GetFullName():lower()
+            if full:find("duel") or full:find("match") or full:find("active") then
+                local ownRow = false
+
+                for _, obj in ipairs(container:GetDescendants()) do
+                    if isText(obj) then
+                        local txt = tostring(obj.Text or ""):lower()
+                        for _, name in ipairs(names) do
+                            if name ~= "" and txt == name then ownRow = true break end
+                        end
+                    end
+                    if ownRow then break end
+                end
+
+                if ownRow then
+                    for _, obj in ipairs(container:GetDescendants()) do
+                        if isText(obj) then
+                            local fullObj = obj:GetFullName():lower()
+                            local name = obj.Name:lower()
+                            if name:find("win") or fullObj:find("wins") or fullObj:find(".win") then setText(obj, shown) end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function applyVisual()
+    local root = pg()
+    if not root then return end
+
+    local levelRaw = effectiveLevel()
+    local winsRaw = effectiveWins()
+    local streakRaw = effectiveStreak()
+    local levelText = levelRaw ~= "" and normalize("Level", levelRaw) or ""
+    local levelNumber = levelRaw ~= "" and normalize("RawLevel", levelRaw) or ""
+
+    setPath({"Lobby", "HUD", "Top", "Currency", "Template", "Value"}, commaNumber(visual("Crowns")))
+    setPath({"Lobby", "Shop", "Main", "CurrencyContainer", "Crowns", "Value"}, commaNumber(visual("Crowns")))
+    setPath({"Lobby", "HUD", "PlayerLevel", "Level"}, levelText)
+    setPath({"Lobby", "HUD", "PlayerLevel", "XP"}, visual("LobbyXP"))
+    setPath({"Lobby", "HUD", "Right", "Leaderboard", "PlayerPopOut", "Main", "CurrentLevel"}, levelText)
+    setPath({"Lobby", "HUD", "Right", "Leaderboard", "PlayerPopOut", "Main", "Username"}, normalize("Username", visual("LBUsername")))
+    setPath({"Lobby", "HUD", "Right", "Leaderboard", "PlayerPopOut", "Main", "DisplayName"}, visual("LBDisplay"))
+    setPath({"Lobby", "HUD", "Right", "Leaderboard", "PlayerPopOut", "Main", "Streak", "Value"}, commaNumber(streakRaw))
+    setPath({"Lobby", "HUD", "Right", "Leaderboard", "PlayerPopOut", "Stats", "Wins", "Frame", "Value"}, commaNumber(winsRaw))
+
+    setMatching(root, function(_, full, name) return full:find("currency") and name == "value" and not full:find("price") end, commaNumber(visual("Crowns")))
+    setMatching(root, function(_, full) return full:find("playerlevel") and full:find("level") end, levelText)
+    setMatching(root, function(_, full) return full:find("overhead") and full:find("streak") end, commaNumber(streakRaw))
+    setMatching(Workspace, function(_, full) return full:find("overhead") and full:find("streak") end, commaNumber(streakRaw))
+    setMatching(root, function(_, full) return full:find("overhead") and full:find("level") end, levelNumber)
+    setMatching(Workspace, function(_, full) return full:find("overhead") and full:find("level") end, levelNumber)
+
+    applyTitleUnlocker()
+    spoofTitleVisual()
+    applyWeaponStats()
+    applyDeviceSpoof()
+    spoofOwnWinsTables(winsRaw)
+
+    local lb = byPath(root, {"SurfaceGUIs", "Screens", "Leaderboard", "Main"})
+    if lb then
+        spoofLeaderboardGroup(lb:FindFirstChild("Win"), winsRaw)
+        spoofLeaderboardGroup(lb:FindFirstChild("WinStreak"), streakRaw)
+        spoofLeaderboardGroup(lb:FindFirstChild("Level"), levelNumber)
+    end
+end
+
+PerfBox:AddToggle("PerfEnabled", {Text = "enabled", Default = false}):OnChanged(function(v) PerfEnabled = v end)
+PerfBox:AddToggle("DisableParticles", {Text = "disable particles", Default = true}):OnChanged(function(v) DisableParticles = v end)
+PerfBox:AddToggle("LowLighting", {Text = "low lighting", Default = true}):OnChanged(function(v) LowLighting = v end)
+
+local function applyPerformance()
+    if not PerfEnabled then return end
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+    if LowLighting then
+        pcall(function()
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 100000
+            Lighting.Brightness = 1
+        end)
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if obj:IsA("BloomEffect") or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") or obj:IsA("BlurEffect") then pcall(function() obj.Enabled = false end) end
+        end
+    end
+    if DisableParticles then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then pcall(function() obj.Enabled = false end) end
+        end
+    end
+    pcall(function() Workspace.Terrain.Decoration = false end)
+end
+
+PerfBox:AddButton("apply fps boost", function()
+    applyPerformance()
+end)
+
+task.spawn(function()
+    while task.wait(0.25) do
+        if Persistent then
+            for name in pairs(profilePaths) do spoofProfile(name) end
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.7) do
+        if Persistent then applyVisual() end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.35) do
+        if WeaponPersistent then applyWeaponStats() end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(4) do
+        applyPerformance()
+    end
+end)
